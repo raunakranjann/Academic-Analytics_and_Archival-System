@@ -1,6 +1,8 @@
 package com.beu.result.DocumentArchival.service;
 
 import com.beu.result.AcademicAnalytics.config.ResultSourceConfig;
+import com.beu.result.AcademicAnalytics.entity.StudentInformations;
+import com.beu.result.AcademicAnalytics.repository.StudentInfoRepository;
 import com.beu.result.DocumentArchival.config.ArchivalJobRequest;
 import com.beu.result.DocumentArchival.util.ArchivalTelemetry;
 import com.microsoft.playwright.*;
@@ -18,12 +20,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
-/**
- * Service responsible for PDF certificate generation and archival.
- * Optimized for Standalone Linux/Debian Deployment.
- */
 @Service
 public class CertificateGenerationService {
 
@@ -31,48 +32,64 @@ public class CertificateGenerationService {
 
     private final ArchivalTelemetry telemetry;
     private final ResultSourceConfig sourceConfig;
+    private final StudentInfoRepository studentInfoRepository;
 
-    public CertificateGenerationService(ArchivalTelemetry telemetry, ResultSourceConfig sourceConfig) {
+    public CertificateGenerationService(ArchivalTelemetry telemetry, ResultSourceConfig sourceConfig, StudentInfoRepository studentInfoRepository) {
         this.telemetry = telemetry;
         this.sourceConfig = sourceConfig;
+        this.studentInfoRepository = studentInfoRepository;
+    }
+
+    @Async
+    public void generateCertificatesForSession(String sessionYear, String linkKey) {
+        List<Long> registrationNumbers = studentInfoRepository.findAll().stream()
+                .filter(s -> String.valueOf(s.getEffectiveSessionYear()).equals(sessionYear))
+                .map(StudentInformations::getRegistrationNumber)
+                .collect(Collectors.toList());
+
+        if (registrationNumbers.isEmpty()) {
+            LOG.warn("No students found for session year: {}", sessionYear);
+            telemetry.finalizeJob();
+            return;
+        }
+
+        ArchivalJobRequest jobRequest = new ArchivalJobRequest();
+        jobRequest.setLinkKey(linkKey);
+        // The range is not used, but we set it for consistency
+        jobRequest.setRangeStart(registrationNumbers.get(0));
+        jobRequest.setRangeEnd(registrationNumbers.get(registrationNumbers.size() - 1));
+
+        executeArchival(jobRequest, registrationNumbers);
     }
 
     @Async
     public void generateCertificates(ArchivalJobRequest jobRequest) {
+        List<Long> registrationNumbers = LongStream.rangeClosed(jobRequest.getRangeStart(), jobRequest.getRangeEnd())
+                .boxed().collect(Collectors.toList());
+        executeArchival(jobRequest, registrationNumbers);
+    }
+
+    private void executeArchival(ArchivalJobRequest jobRequest, List<Long> registrationNumbers) {
         String urlTemplate = sourceConfig.getUrl(jobRequest.getLinkKey());
         if (urlTemplate == null) {
             LOG.error("ABORTING: No configuration found for Data Source '{}'", jobRequest.getLinkKey());
             return;
         }
 
-        long startReg = jobRequest.getRangeStart();
-        long endReg = jobRequest.getRangeEnd();
-        int totalRecords = (int) (endReg - startReg + 1);
-
-        telemetry.initializeJob(totalRecords);
+        telemetry.initializeJob(registrationNumbers.size());
 
         String safeBatchName = jobRequest.getLinkKey().replaceAll("[^a-zA-Z0-9.-]", "_");
         File outputDir = Paths.get(jobRequest.getStorageLocation(), safeBatchName).toFile();
         if (!outputDir.exists()) outputDir.mkdirs();
 
-        // 1. Initialize Playwright with strict Linux/Debian configuration
         try (Playwright playwright = Playwright.create()) {
-
-            // Define Linux bundled path
             String appPath = System.getProperty("user.dir");
             Path bundledPath = Paths.get(appPath, "browsers", "linux", "chrome-linux", "chrome");
 
-            // 2. Configure Linux-specific launch options to prevent SIGTRAP crashes
             BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
                     .setHeadless(true)
-                    .setArgs(Arrays.asList(
-                            "--no-sandbox",              // Required for execution in /opt
-                            "--disable-setuid-sandbox",  // Fixes SIGTRAP fatal error
-                            "--disable-dev-shm-usage",   // Prevents shared memory crashes
-                            "--disable-gpu"              // Optimizes resource usage
-                    ));
+                    .setArgs(Arrays.asList("--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"));
 
-            // 3. Tiered Browser Resolution (Bundled -> System -> Download)
             if (Files.exists(bundledPath)) {
                 launchOptions.setExecutablePath(bundledPath);
                 LOG.info("Archival Engine: Using bundled browser at {}", bundledPath);
@@ -85,7 +102,7 @@ public class CertificateGenerationService {
 
                 Page page = context.newPage();
 
-                for (long currentReg = startReg; currentReg <= endReg; currentReg++) {
+                for (long currentReg : registrationNumbers) {
                     processSingleRecord(page, urlTemplate, currentReg, outputDir.getAbsolutePath());
                 }
 
@@ -114,7 +131,6 @@ public class CertificateGenerationService {
             PageStatus status = waitForDataCompleteness(page);
 
             if (status == PageStatus.READY) {
-                // Ensure specific rendering delay for Angular/Legacy hybrid apps
                 if (page.locator("#container").count() > 0 && page.locator("app-root").count() == 0) {
                     page.waitForTimeout(500);
                 }
@@ -223,7 +239,7 @@ public class CertificateGenerationService {
             PDFMergerUtility pdfMerger = new PDFMergerUtility();
             pdfMerger.setDestinationFileName(folderPath + File.separator + outputFileName);
             File folder = new File(folderPath);
-            File[] files = folder.listFiles((dir, name) -> name.endsWith(".pdf") && !name.equalsIgnoreCase(outputFileName) && !name.startsWith("ERROR_"));
+            File[] files = folder.listFiles((dir, name) -> name.endsWith(".pdf") && !name.startsWith("ERROR_"));
             if (files != null && files.length > 0) {
                 Arrays.sort(files, Comparator.comparing(File::getName));
                 for (File file : files) pdfMerger.addSource(file);

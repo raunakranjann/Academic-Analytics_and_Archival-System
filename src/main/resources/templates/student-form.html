@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>Student Information</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', 'Roboto', sans-serif; }
+        .navbar { background-color: #2c3e50 !important; }
+        .form-container {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 35px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        .form-label { font-weight: 600; color: #555; font-size: 0.9rem; }
+        .semester-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+        }
+        .card-header {
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+            font-weight: 700;
+            color: #343a40;
+        }
+        #cgpa { font-weight: bold; background-color: #e9ecef; }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">
+                <i class="bi bi-pencil-square me-2"></i> STUDENT DATA MANAGEMENT
+            </a>
+            <div class="ms-auto">
+                <a href="/" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-speedometer2 me-1"></i> Dashboard</a>
+                <a href="/reports/student-registry" class="btn btn-outline-light btn-sm"><i class="bi bi-list-ul me-1"></i> Student Registry</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="form-container">
+        <form th:action="@{/student/save}" th:object="${student}" method="post">
+            <input type="hidden" th:if="${student.registrationNumber != null}" th:field="*{registrationNumber}" />
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    Core Information
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="registrationNumber" class="form-label">Registration Number</label>
+                            <input type="text" id="registrationNumber" class="form-control" th:if="${student.registrationNumber == null}" th:field="*{registrationNumber}" required onblur="handleRegistrationNumberInput(this.value)" />
+                            <p th:if="${student.registrationNumber != null}" class="form-control-plaintext" th:text="*{registrationNumber}"></p>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="course" class="form-label">Course</label>
+                            <input type="text" id="course" class="form-control" th:field="*{course}" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="branch" class="form-label">Branch</label>
+                            <input type="text" id="branch" class="form-control" th:field="*{branch}" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    Personal & Status Details
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label for="studentName" class="form-label">Student Name</label>
+                            <input type="text" id="studentName" class="form-control" th:field="*{studentName}" required />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="fatherName" class="form-label">Father's Name</label>
+                            <input type="text" id="fatherName" class="form-control" th:field="*{fatherName}" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="motherName" class="form-label">Mother's Name</label>
+                            <input type="text" id="motherName" class="form-control" th:field="*{motherName}" />
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label for="studentStatus" class="form-label">Student Status</label>
+                            <select id="studentStatus" class="form-select" th:field="*{studentStatus}">
+                                <option th:each="status : ${T(com.beu.result.AcademicAnalytics.entity.StudentStatus).values()}"
+                                        th:value="${status}" th:text="${status.name()}"></option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    Academic Performance (SGPA)
+                    <div class="col-md-3">
+                        <label for="cgpa" class="form-label">Calculated CGPA</label>
+                        <input type="text" id="cgpa" class="form-control" th:field="*{grade.cgpa}" readonly />
+                    </div>
+                </div>
+                <div class="card-body semester-grid">
+                    <div th:each="i : ${#numbers.sequence(1, 8)}">
+                        <label th:for="'sem' + ${i}" class="form-label" th:text="'Semester ' + ${i}"></label>
+                        <input type="text" th:id="'sem' + ${i}" class="form-control sgpa-input" th:field="*{grade.sem__${i}__}" oninput="calculateCgpa()" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-4">
+                 <a href="/reports/student-registry" class="btn btn-secondary"><i class="bi bi-x-circle me-1"></i> Cancel</a>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle-fill me-1"></i> Save Student</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', calculateCgpa);
+
+        function handleRegistrationNumberInput(regNo) {
+            if (regNo.length < 9) return;
+            fetch(`/student/api/${regNo}`)
+                .then(response => {
+                    if (response.ok) return response.json();
+                    resetFormForNewStudent();
+                    applyCourseBranchLogic(regNo);
+                    return null;
+                })
+                .then(data => {
+                    if (data) {
+                        populateForm(data);
+                        calculateCgpa(); // Recalculate CGPA after populating
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching student data:', error);
+                    resetFormForNewStudent();
+                    applyCourseBranchLogic(regNo);
+                });
+        }
+
+        function populateForm(data) {
+            if (document.getElementById('studentName').value.trim() === '') {
+                document.getElementById('studentName').value = data.studentName || '';
+            }
+            if (document.getElementById('fatherName').value.trim() === '') {
+                document.getElementById('fatherName').value = data.fatherName || '';
+            }
+            if (document.getElementById('motherName').value.trim() === '') {
+                document.getElementById('motherName').value = data.motherName || '';
+            }
+
+            document.getElementById('course').value = data.course || '';
+            document.getElementById('branch').value = data.branch || '';
+            document.getElementById('studentStatus').value = data.studentStatus || 'REGULAR';
+            if (data.grade) {
+                for (let i = 1; i <= 8; i++) {
+                    document.getElementById(`sem${i}`).value = data.grade['sem' + i] || '';
+                }
+            }
+        }
+
+        function resetFormForNewStudent() {
+            document.getElementById('studentName').value = '';
+            document.getElementById('fatherName').value = '';
+            document.getElementById('motherName').value = '';
+            document.getElementById('studentStatus').value = 'REGULAR';
+            for (let i = 1; i <= 8; i++) {
+                document.getElementById(`sem${i}`).value = '';
+            }
+            calculateCgpa();
+        }
+
+        function applyCourseBranchLogic(regNo) {
+            const courseCode = regNo.substring(4, 6);
+            const branchCode = regNo.substring(6, 9);
+            if (courseCode === '10') document.getElementById('course').value = 'B.Tech';
+            const branchMap = { '101': 'Civil Engineering', '102': 'Mechanical Engineering', '103': 'Electrical Engineering', '104': 'Computer Science', '105': 'Electronics and Communication' };
+            if (branchMap[branchCode]) document.getElementById('branch').value = branchMap[branchCode];
+        }
+
+        function calculateCgpa() {
+            let totalSgpa = 0;
+            let semesterCount = 0;
+            const sgpaInputs = document.querySelectorAll('.sgpa-input');
+
+            sgpaInputs.forEach(input => {
+                const sgpa = parseFloat(input.value);
+                if (!isNaN(sgpa) && sgpa > 0) {
+                    totalSgpa += sgpa;
+                    semesterCount++;
+                }
+            });
+
+            const cgpaField = document.getElementById('cgpa');
+            if (semesterCount > 0) {
+                const averageCgpa = totalSgpa / semesterCount;
+                cgpaField.value = averageCgpa.toFixed(2);
+            } else {
+                cgpaField.value = '';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -46,19 +46,24 @@
         </a>
         <div class="ms-auto">
 
-
             <a href="/reports/student-registry" class="btn btn-outline-light btn-sm">Registry</a>
 
+            <a href="/admin/ingestion-portal" class="btn btn-outline-light btn-sm me-1">Ingest by Range</a>
+            <a href="/admin/ingest-by-session" class="btn btn-outline-light btn-sm me-1">Ingest by Session</a>
 
+            <a href="/admin/archives/console" class="btn btn-outline-light btn-sm me-1">Archive by Range</a>
+            <a href="/admin/archives/archive-by-session" class="btn btn-outline-light btn-sm me-1">Archive by Session</a>
 
-            <a href="/admin/ingestion-portal" class="btn btn-outline-light btn-sm me-1">Ingestion Portal</a>
-
-            <a href="/admin/archives/console" class="btn btn-outline-light btn-sm me-1">Download Results</a>
+            <a th:if="${isAdmin}" href="/user-management" class="btn btn-outline-light btn-sm me-1">User Management</a>
 
             <button onclick="downloadPDF()" class="btn btn-light btn-sm fw-bold me-2">
                 Download Report
             </button>
 
+            <!-- Replaced JS logout with form POST for better security and cookie clearing -->
+            <form action="/logout" method="post" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm">Logout</button>
+            </form>
 
         </div>
     </div>
@@ -250,6 +255,5 @@
 
     /*]]>*/
 </script>
-
 </body>
 </html>

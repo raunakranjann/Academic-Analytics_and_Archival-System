@@ -1,12 +1,14 @@
 package com.beu.result.AcademicAnalytics.controller;
 
-import com.beu.result.AcademicAnalytics.entity.StudentInformations; // UPDATED ENTITY
+import com.beu.result.AcademicAnalytics.entity.StudentInformations;
 import com.beu.result.AcademicAnalytics.repository.StudentInfoRepository;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,15 +18,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
-/**
- * Controller for Report Generation and Data Export.
- * <p>
- * Handles the detailed "Student Registry" view with pagination, search, and sorting capabilities.
- * Also manages the export of filtered datasets to Excel (XLSX) format for offline analysis.
- * </p>
- */
 @Controller
 @RequestMapping("/reports")
 public class ReportGenerationController {
@@ -36,17 +32,8 @@ public class ReportGenerationController {
         this.studentRepository = studentRepository;
     }
 
-    // ==========================================
-    // 1. PAGINATED REGISTRY VIEW
-    // ==========================================
-
-    /**
-     * Renders the Paginated Student Registry.
-     * Endpoint: /reports/student-registry
-     */
     @GetMapping("/student-registry")
     public String viewStudentRegistry(
-
             @RequestParam(name = "year", required = false) String year,
             @RequestParam(name = "branch", required = false) String branch,
             @RequestParam(name = "name", required = false) String name,
@@ -58,60 +45,53 @@ public class ReportGenerationController {
 
         long startTime = System.currentTimeMillis();
 
-        // 1. Retrieve & Filter Dataset (Using Updated Entity)
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isAdmin = auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ADMIN"));
+        model.addAttribute("isAdmin", isAdmin);
+
         List<StudentInformations> filteredDataset = executeFilterQuery(year, branch, name, rank);
 
-        // 2. Pagination Logic
+        // Calculate max completed semesters for each session
+        Map<Integer, Integer> maxSemestersPerSession = filteredDataset.stream()
+                .filter(s -> s.getGrade() != null)
+                .collect(Collectors.groupingBy(
+                        StudentInformations::getEffectiveSessionYear,
+                        Collectors.collectingAndThen(
+                                Collectors.maxBy((s1, s2) -> Integer.compare(s1.getGrade().getCompletedSemesterCount(), s2.getGrade().getCompletedSemesterCount())),
+                                opt -> opt.map(s -> s.getGrade().getCompletedSemesterCount()).orElse(0)
+                        )
+                ));
+
         int totalItems = filteredDataset.size();
         int totalPages = (int) Math.ceil((double) totalItems / size);
 
-        // Normalize page request
         if (page < 1) page = 1;
         if (page > totalPages && totalPages > 0) page = totalPages;
 
         int startIdx = (page - 1) * size;
         int endIdx = Math.min(startIdx + size, totalItems);
 
-        List<StudentInformations> pageContent;
-        if (startIdx >= totalItems) {
-            pageContent = Collections.emptyList();
-        } else {
-            pageContent = filteredDataset.subList(startIdx, endIdx);
-        }
+        List<StudentInformations> pageContent = (startIdx >= totalItems) ? Collections.emptyList() : filteredDataset.subList(startIdx, endIdx);
 
-        // 3. View Attributes Population
         model.addAttribute("students", pageContent);
-
-        // Context Filters (Dropdowns)
         model.addAttribute("branches", studentRepository.findDistinctBranches());
         model.addAttribute("batchYears", studentRepository.findDistinctBatchYears());
-
-        // Preserve Filter State
         model.addAttribute("selectedYear", year);
         model.addAttribute("selectedBranch", branch);
         model.addAttribute("selectedName", name);
         model.addAttribute("isRanked", rank);
         model.addAttribute("showBacklog", showBacklog != null && showBacklog);
-
-        // Pagination Meta-data
         model.addAttribute("currentPage", page);
         model.addAttribute("totalPages", totalPages);
         model.addAttribute("totalItems", totalItems);
         model.addAttribute("pageSize", size);
+        model.addAttribute("maxSemestersPerSession", maxSemestersPerSession);
 
         LOG.debug("Registry view loaded. Page {}/{} ({}ms)", page, totalPages, System.currentTimeMillis() - startTime);
 
-        return "student-registry"; // Ensure your HTML file is named 'student-registry.html'
+        return "student-registry";
     }
 
-    // ==========================================
-    // 2. DATA EXPORT (EXCEL)
-    // ==========================================
-    /**
-     * Generates and downloads an Excel report of the current filtered view.
-     * Respects the 'showBacklog' toggle to switch between SGPA and Failed Subjects.
-     * Endpoint: /reports/export/excel
-     */
     @GetMapping("/export/excel")
     public void exportToExcel(
             @RequestParam(name = "year", required = false) String year,
@@ -121,9 +101,7 @@ public class ReportGenerationController {
             @RequestParam(defaultValue = "false") boolean showBacklog,
             HttpServletResponse response) throws IOException {
 
-        LOG.info("Initiating Excel export. Filters: [Year={}, Branch={}, Rank={}, ShowBacklog={}]",
-                year, branch, rank, showBacklog);
-
+        LOG.info("Initiating Excel export. Filters: [Year={}, Branch={}, Rank={}, ShowBacklog={}]", year, branch, rank, showBacklog);
         List<StudentInformations> dataset = executeFilterQuery(year, branch, name, rank);
 
         response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -132,15 +110,13 @@ public class ReportGenerationController {
         try (Workbook workbook = new XSSFWorkbook()) {
             Sheet sheet = workbook.createSheet("Academic Registry");
 
-            // Header Style
             CellStyle headerStyle = workbook.createCellStyle();
             Font font = workbook.createFont();
             font.setBold(true);
             headerStyle.setFont(font);
 
-            // Create Headers
             Row headerRow = sheet.createRow(0);
-            String[] columns = {"Reg No", "Student Name", "Branch", "Sem 1", "Sem 2", "Sem 3", "Sem 4", "Sem 5", "Sem 6", "Sem 7", "Sem 8", "CGPA"};
+            String[] columns = {"Reg No", "Student Name", "Branch", "Status", "Sem 1", "Sem 2", "Sem 3", "Sem 4", "Sem 5", "Sem 6", "Sem 7", "Sem 8", "CGPA"};
 
             for (int i = 0; i < columns.length; i++) {
                 Cell cell = headerRow.createCell(i);
@@ -148,96 +124,69 @@ public class ReportGenerationController {
                 cell.setCellStyle(headerStyle);
             }
 
-            // Populate Data
             int rowIdx = 1;
             for (StudentInformations s : dataset) {
                 Row row = sheet.createRow(rowIdx++);
                 row.createCell(0).setCellValue(s.getRegistrationNumber());
                 row.createCell(1).setCellValue(s.getStudentName());
                 row.createCell(2).setCellValue(s.getBranch());
+                row.createCell(3).setCellValue(s.getStudentStatus() != null ? s.getStudentStatus().name() : "REGULAR");
 
                 if (s.getGrade() != null) {
-                    // Determine whether to pull from Grade or Backlog entity
                     if (showBacklog && s.getGrade().getBacklog() != null) {
-                        // Pull Failed Subjects/Remarks from Backlog
-                        row.createCell(3).setCellValue(s.getGrade().getBacklog().getSem1());
-                        row.createCell(4).setCellValue(s.getGrade().getBacklog().getSem2());
-                        row.createCell(5).setCellValue(s.getGrade().getBacklog().getSem3());
-                        row.createCell(6).setCellValue(s.getGrade().getBacklog().getSem4());
-                        row.createCell(7).setCellValue(s.getGrade().getBacklog().getSem5());
-                        row.createCell(8).setCellValue(s.getGrade().getBacklog().getSem6());
-                        row.createCell(9).setCellValue(s.getGrade().getBacklog().getSem7());
-                        row.createCell(10).setCellValue(s.getGrade().getBacklog().getSem8());
+                        row.createCell(4).setCellValue(s.getGrade().getBacklog().getSem1());
+                        row.createCell(5).setCellValue(s.getGrade().getBacklog().getSem2());
+                        row.createCell(6).setCellValue(s.getGrade().getBacklog().getSem3());
+                        row.createCell(7).setCellValue(s.getGrade().getBacklog().getSem4());
+                        row.createCell(8).setCellValue(s.getGrade().getBacklog().getSem5());
+                        row.createCell(9).setCellValue(s.getGrade().getBacklog().getSem6());
+                        row.createCell(10).setCellValue(s.getGrade().getBacklog().getSem7());
+                        row.createCell(11).setCellValue(s.getGrade().getBacklog().getSem8());
                     } else {
-                        // Default: Pull SGPA from Grade
-                        row.createCell(3).setCellValue(s.getGrade().getSem1());
-                        row.createCell(4).setCellValue(s.getGrade().getSem2());
-                        row.createCell(5).setCellValue(s.getGrade().getSem3());
-                        row.createCell(6).setCellValue(s.getGrade().getSem4());
-                        row.createCell(7).setCellValue(s.getGrade().getSem5());
-                        row.createCell(8).setCellValue(s.getGrade().getSem6());
-                        row.createCell(9).setCellValue(s.getGrade().getSem7());
-                        row.createCell(10).setCellValue(s.getGrade().getSem8());
+                        row.createCell(4).setCellValue(s.getGrade().getSem1());
+                        row.createCell(5).setCellValue(s.getGrade().getSem2());
+                        row.createCell(6).setCellValue(s.getGrade().getSem3());
+                        row.createCell(7).setCellValue(s.getGrade().getSem4());
+                        row.createCell(8).setCellValue(s.getGrade().getSem5());
+                        row.createCell(9).setCellValue(s.getGrade().getSem6());
+                        row.createCell(10).setCellValue(s.getGrade().getSem7());
+                        row.createCell(11).setCellValue(s.getGrade().getSem8());
                     }
-                    // Always include CGPA
-                    row.createCell(11).setCellValue(s.getGrade().getCgpa());
+                    row.createCell(12).setCellValue(s.getGrade().getCgpa());
                 } else {
-                    // Fill with '-' if no grade record exists
-                    for (int j = 3; j <= 11; j++) {
+                    for (int j = 4; j <= 12; j++) {
                         row.createCell(j).setCellValue("-");
                     }
                 }
             }
 
-            // Auto-size columns for readability
             for (int i = 0; i < columns.length; i++) {
                 sheet.autoSizeColumn(i);
             }
 
             workbook.write(response.getOutputStream());
-            LOG.info("Excel export completed successfully. Rows: {}, View: {}",
-                    dataset.size(), showBacklog ? "Backlogs" : "Grades");
         }
     }
 
-    // ==========================================
-    // HELPER: FILTERING ENGINE
-    // ==========================================
-
     private List<StudentInformations> executeFilterQuery(String year, String branch, String name, Boolean rank) {
-        // 1. Normalize Parameters
+        List<StudentInformations> allStudents = studentRepository.findAll();
         String yearPrefix = (year != null && !year.trim().isEmpty() && !year.equals("All")) ? year.trim() : null;
-        if (yearPrefix != null && yearPrefix.length() == 4) yearPrefix = yearPrefix.substring(2);
-
         String branchParam = (branch != null && !branch.trim().isEmpty() && !branch.equals("All")) ? branch.trim() : null;
 
-        // 2. Database Retrieval
-        List<StudentInformations> results;
-        if (yearPrefix == null && branchParam == null) {
-            results = studentRepository.findAll();
-        } else {
-            results = studentRepository.searchByYearAndBranch(yearPrefix, branchParam);
-        }
+        List<StudentInformations> filtered = allStudents.stream()
+            .filter(s -> yearPrefix == null || String.valueOf(s.getEffectiveSessionYear()).equals(yearPrefix))
+            .filter(s -> branchParam == null || (s.getBranch() != null && s.getBranch().equalsIgnoreCase(branchParam)))
+            .filter(s -> name == null || (s.getStudentName() != null && s.getStudentName().toLowerCase().contains(name.toLowerCase())))
+            .collect(Collectors.toList());
 
-        // 3. In-Memory Name Filter
-        if (name != null && !name.trim().isEmpty()) {
-            String searchName = name.trim().toLowerCase();
-            results = results.stream()
-                    .filter(s -> s.getStudentName() != null && s.getStudentName().toLowerCase().contains(searchName))
-                    .collect(Collectors.toList());
-        }
-
-        // 4. Ranking Logic (Sort by CGPA Descending)
         if (Boolean.TRUE.equals(rank)) {
-            results = results.stream()
-                    .sorted((s1, s2) -> {
-                        Double cgpa1 = safeParseDouble(s1.getGrade() != null ? s1.getGrade().getCgpa() : "0");
-                        Double cgpa2 = safeParseDouble(s2.getGrade() != null ? s2.getGrade().getCgpa() : "0");
-                        return cgpa2.compareTo(cgpa1);
-                    })
-                    .collect(Collectors.toList());
+            filtered.sort((s1, s2) -> {
+                Double cgpa1 = safeParseDouble(s1.getGrade() != null ? s1.getGrade().getCgpa() : "0");
+                Double cgpa2 = safeParseDouble(s2.getGrade() != null ? s2.getGrade().getCgpa() : "0");
+                return cgpa2.compareTo(cgpa1);
+            });
         }
-        return results;
+        return filtered;
     }
 
     private Double safeParseDouble(String val) {

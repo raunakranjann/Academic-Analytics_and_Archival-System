@@ -1,9 +1,11 @@
 package com.beu.result.AcademicAnalytics.controller;
 
-import com.beu.result.AcademicAnalytics.entity.StudentInformations; // UPDATED IMPORT
+import com.beu.result.AcademicAnalytics.entity.StudentInformations;
 import com.beu.result.AcademicAnalytics.repository.StudentInfoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,10 +15,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Primary Controller for the Business Intelligence (BI) Dashboard.
- * Updated to use the new 'StudentInformations' entity.
- */
 @Controller
 @RequestMapping("/")
 public class AdminDashboardController {
@@ -28,9 +26,6 @@ public class AdminDashboardController {
         this.studentRepository = studentRepository;
     }
 
-    /**
-     * Renders the main analytics view.
-     */
     @GetMapping
     public String renderDashboard(
             @RequestParam(name = "year", required = false) String year,
@@ -39,32 +34,30 @@ public class AdminDashboardController {
 
         long startTime = System.currentTimeMillis();
 
-        // 1. FILTER NORMALIZATION
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        boolean isAdmin = auth != null && auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ADMIN"));
+        model.addAttribute("isAdmin", isAdmin);
+
         String yearPrefix = normalizeYearInput(year);
         String branchParam = (branch != null && !branch.trim().isEmpty() && !branch.equals("All")) ? branch.trim() : null;
 
-        // 2. DATA RETRIEVAL (Using new Entity)
-        List<StudentInformations> dataset;
-        if (yearPrefix == null && branchParam == null) {
-            dataset = studentRepository.findAll();
-        } else {
-            dataset = studentRepository.searchByYearAndBranch(yearPrefix, branchParam);
-        }
+        List<StudentInformations> allStudents = studentRepository.findAll();
+        
+        List<StudentInformations> dataset = allStudents.stream()
+            .filter(s -> yearPrefix == null || String.valueOf(s.getEffectiveSessionYear()).equals(yearPrefix))
+            .filter(s -> branchParam == null || (s.getBranch() != null && s.getBranch().equalsIgnoreCase(branchParam)))
+            .collect(Collectors.toList());
 
         LOG.info("Dashboard query fetched {} records. Filters: [Year={}, Branch={}]",
                 dataset.size(), yearPrefix, branchParam);
 
-        // 3. KPI COMPUTATION
-
-        // KPI A: Branch-wise Performance (Average CGPA)
         Map<String, Double> branchAvgCgpa = dataset.stream()
                 .filter(s -> s.getBranch() != null && hasValidCgpa(s))
                 .collect(Collectors.groupingBy(
-                        StudentInformations::getBranch, // Updated Method Reference
+                        StudentInformations::getBranch,
                         Collectors.averagingDouble(s -> safeParseDouble(s.getGrade().getCgpa()))
                 ));
 
-        // KPI B: Grade Distribution Buckets
         int[] distributionBuckets = new int[5];
         for (StudentInformations s : dataset) {
             if (hasValidCgpa(s)) {
@@ -77,21 +70,24 @@ public class AdminDashboardController {
             }
         }
 
-        // KPI C: Pass/Fail Ratio
         long passCount = dataset.stream()
                 .filter(s -> hasValidCgpa(s) && safeParseDouble(s.getGrade().getCgpa()) >= 5.0)
                 .count();
         long failCount = dataset.size() - passCount;
 
-        // KPI D: Institutional Average
         double institutionalAverage = dataset.stream()
                 .filter(this::hasValidCgpa)
                 .mapToDouble(s -> safeParseDouble(s.getGrade().getCgpa()))
                 .average().orElse(0.0);
 
-        // 4. VIEW POPULATION
         model.addAttribute("branches", studentRepository.findDistinctBranches());
-        model.addAttribute("batchYears", studentRepository.findDistinctBatchYears());
+        
+        List<String> effectiveBatchYears = allStudents.stream()
+                .map(s -> String.valueOf(s.getEffectiveSessionYear()))
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+        model.addAttribute("batchYears", effectiveBatchYears);
 
         model.addAttribute("selectedYear", year);
         model.addAttribute("selectedBranch", branch);
@@ -109,10 +105,6 @@ public class AdminDashboardController {
         return "dashboard";
     }
 
-    // ==========================================
-    // HELPER UTILITIES
-    // ==========================================
-
     private String normalizeYearInput(String year) {
         if (year != null && !year.trim().isEmpty() && !year.equals("All")) {
             String trimmed = year.trim();
@@ -122,7 +114,7 @@ public class AdminDashboardController {
     }
 
     private boolean hasValidCgpa(StudentInformations s) {
-        return s.getGrade() != null && s.getGrade().getCgpa() != null;
+        return s.getGrade() != null && s.getGrade().getCgpa() != null && !s.getGrade().getCgpa().equals("NA");
     }
 
     private double safeParseDouble(String value) {

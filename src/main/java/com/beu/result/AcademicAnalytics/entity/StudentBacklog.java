@@ -1,5 +1,6 @@
 package com.beu.result.AcademicAnalytics.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -18,6 +19,7 @@ public class StudentBacklog {
     @MapsId
     @JoinColumn(name = "registration_number")
     @ToString.Exclude
+    @JsonBackReference
     private StudentGrade studentGrade;
 
     private String sem1;

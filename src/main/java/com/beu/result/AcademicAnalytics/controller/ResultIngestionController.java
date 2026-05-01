@@ -1,6 +1,7 @@
 package com.beu.result.AcademicAnalytics.controller;
 
 import com.beu.result.AcademicAnalytics.config.ResultSourceConfig;
+import com.beu.result.AcademicAnalytics.repository.StudentInfoRepository;
 import com.beu.result.AcademicAnalytics.service.DataSyncStatus;
 import com.beu.result.AcademicAnalytics.service.TranscriptGenerationService;
 import org.springframework.stereotype.Controller;
@@ -10,47 +11,44 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Controller for the Data Ingestion Module.
- * Manages the UI and API for triggering academic record synchronization.
- */
 @Controller
 public class ResultIngestionController {
 
     private final TranscriptGenerationService ingestionService;
     private final ResultSourceConfig sourceConfig;
     private final DataSyncStatus syncStatus;
+    private final StudentInfoRepository studentInfoRepository;
 
     public ResultIngestionController(TranscriptGenerationService ingestionService,
                                      ResultSourceConfig sourceConfig,
-                                     DataSyncStatus syncStatus) {
+                                     DataSyncStatus syncStatus,
+                                     StudentInfoRepository studentInfoRepository) {
         this.ingestionService = ingestionService;
         this.sourceConfig = sourceConfig;
         this.syncStatus = syncStatus;
+        this.studentInfoRepository = studentInfoRepository;
     }
 
-    // ==========================================
-    // VIEW CONTROLLER
-    // ==========================================
-
-    /**
-     * Renders the Ingestion Dashboard UI.
-     * Endpoint: /admin/ingestion-portal
-     */
     @GetMapping("/admin/ingestion-portal")
     public String showIngestionDashboard(Model model) {
-        // Fetches available links from DB (via ResultSourceConfig) for the dropdown
         model.addAttribute("linkMap", sourceConfig.getAllLinks());
         return "ingestion-dashboard";
     }
 
-    // ==========================================
-    // REST API (AJAX/Queue Handlers)
-    // ==========================================
+    @GetMapping("/admin/ingest-by-session")
+    public String showIngestBySession(Model model) {
+        model.addAttribute("linkMap", sourceConfig.getAllLinks());
+        model.addAttribute("batchYears", studentInfoRepository.findDistinctBatchYears());
+        return "ingestion-by-session";
+    }
 
-    /**
-     * API Endpoint: Initiate Batch Ingestion.
-     */
+    @PostMapping("/api/ingestion/start-session")
+    public String initiateIngestionBySession(@RequestParam String sessionYear, @RequestParam String linkKey) {
+        ingestionService.processResultSession(linkKey, sessionYear);
+        // Corrected Redirect: Go back to the session page to see progress
+        return "redirect:/admin/ingest-by-session";
+    }
+
     @PostMapping("/api/ingestion/start-batch")
     @ResponseBody
     public Map<String, Object> initiateIngestionBatch(
@@ -60,7 +58,6 @@ public class ResultIngestionController {
     ) {
         Map<String, Object> response = new HashMap<>();
 
-        // Validation
         if (startReg > endReg) {
             response.put("status", "ERROR");
             response.put("message", "Start Registration cannot be greater than End Registration.");
@@ -73,8 +70,6 @@ public class ResultIngestionController {
             return response;
         }
 
-        // Delegate to Service
-        // The service now handles both "Keys" (db lookup) and "Raw URLs"
         ingestionService.processResultRange(linkKey, startReg, endReg);
 
         response.put("status", "BATCH_INITIATED");
@@ -82,9 +77,6 @@ public class ResultIngestionController {
         return response;
     }
 
-    /**
-     * API Endpoint: Poll Progress Telemetry.
-     */
     @GetMapping("/api/ingestion/progress")
     @ResponseBody
     public DataSyncStatus getIngestionTelemetry() {

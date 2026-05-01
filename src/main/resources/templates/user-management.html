@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>User Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; font-family: 'Segoe UI', 'Roboto', sans-serif; }
+        .navbar { background-color: #2c3e50 !important; }
+        .form-container {
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 35px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        .code-block {
+            background-color: #2d3436;
+            color: #00b894;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.85rem;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .copy-btn {
+            float: right;
+            cursor: pointer;
+            color: #fff;
+            background-color: #636e72;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+        }
+        .copy-btn:hover { background-color: #b2bec3; }
+        .table thead th {
+            background-color: #2c3e50;
+            color: white;
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+    <nav class="navbar navbar-expand-lg navbar-dark shadow-sm">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">
+                <i class="bi bi-people-fill me-2"></i> USER MANAGEMENT & API
+            </a>
+            <div class="ms-auto">
+                <a href="/" class="btn btn-outline-light btn-sm"><i class="bi bi-speedometer2 me-1"></i> Dashboard</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container form-container">
+        <div class="row">
+            <!-- User Creation Form -->
+            <div class="col-md-5 border-end pe-4">
+                <h5 class="mb-4 border-bottom pb-2 fw-bold text-secondary"><i class="bi bi-person-plus-fill me-2"></i>Create New User</h5>
+                <form id="createUserForm">
+                    <div class="mb-3">
+                        <label for="username" class="form-label fw-bold small text-uppercase">Username</label>
+                        <input type="text" id="username" class="form-control" required oninput="updateSnippet()">
+                    </div>
+                    <div class="mb-3">
+                        <label for="fullName" class="form-label fw-bold small text-uppercase">Full Name</label>
+                        <input type="text" id="fullName" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label fw-bold small text-uppercase">Password</label>
+                        <input type="text" id="password" class="form-control" required oninput="updateSnippet()">
+                    </div>
+                    <div class="mb-4">
+                        <label for="role" class="form-label fw-bold small text-uppercase">Access Role</label>
+                        <select id="role" class="form-select">
+                            <option value="API">API Access Only</option>
+                            <option value="ADMIN">Full Administrator</option>
+                        </select>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary"><i class="bi bi-check-circle-fill me-2"></i> Create User</button>
+                    </div>
+                </form>
+
+                <h5 class="mt-5 mb-3 border-bottom pb-2 fw-bold text-secondary"><i class="bi bi-list-ul me-2"></i>Existing Users</h5>
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Name</th>
+                                <th>Role</th>
+                                <th class="text-center">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr th:each="user : ${users}">
+                                <td class="fw-bold text-primary" th:text="${user.username}"></td>
+                                <td th:text="${user.fullName}"></td>
+                                <td>
+                                    <span class="badge bg-secondary" th:each="role : ${user.roles}" th:text="${role.name()}"></span>
+                                </td>
+                                <td class="text-center">
+                                    <button class="btn btn-danger btn-sm py-0 px-2" th:onclick="'deleteUser(' + ${user.id} + ')'" title="Delete User">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr th:if="${#lists.isEmpty(users)}">
+                                <td colspan="4" class="text-center text-muted">No users found.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- API Snippet Display -->
+            <div class="col-md-7 ps-4">
+                <h5 class="mb-4 border-bottom pb-2 fw-bold text-secondary"><i class="bi bi-code-square me-2"></i>API Integration Snippets</h5>
+                <p class="text-muted small">Share these snippets with the new user so they can integrate with the Academic Analytics API.</p>
+
+                <h6 class="fw-bold mt-4 mb-2 small text-uppercase">1. Authenticate (Get JWT Token)</h6>
+                <div class="position-relative">
+                    <button class="copy-btn" onclick="copyToClipboard('authCode')"><i class="bi bi-clipboard me-1"></i>Copy</button>
+                    <div id="authCode" class="code-block">curl -X POST http://<span class="host-domain">localhost:2006</span>/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "<span id="snipUser">user</span>", "password": "<span id="snipPass">pass</span>"}'</div>
+                </div>
+
+                <h6 class="fw-bold mt-4 mb-2 small text-uppercase">2. Fetch Student Data (Requires JWT)</h6>
+                <div class="position-relative">
+                    <button class="copy-btn" onclick="copyToClipboard('dataCode')"><i class="bi bi-clipboard me-1"></i>Copy</button>
+                    <div id="dataCode" class="code-block">curl -X GET http://<span class="host-domain">localhost:2006</span>/student/api/data/22101123001 \
+  -H "Authorization: Bearer <YOUR_JWT_TOKEN_HERE>"</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Update domains based on actual environment
+        document.querySelectorAll('.host-domain').forEach(el => {
+            el.innerText = window.location.host;
+        });
+
+        // Live update the snippet
+        function updateSnippet() {
+            const u = document.getElementById('username').value || 'user';
+            const p = document.getElementById('password').value || 'pass';
+            document.getElementById('snipUser').innerText = u;
+            document.getElementById('snipPass').innerText = p;
+        }
+
+        // Copy functionality
+        function copyToClipboard(elementId) {
+            const copyText = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(copyText).then(() => {
+                alert("Snippet copied to clipboard!");
+            });
+        }
+
+        // Form submission
+        document.getElementById('createUserForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const fullName = document.getElementById('fullName').value;
+            const password = document.getElementById('password').value;
+            const role = document.getElementById('role').value;
+
+            fetch('/api/users', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username, fullName, password, roles: [role] })
+            })
+            .then(response => {
+                if (response.ok) {
+                    alert('User created successfully. You can now share the API snippets with them.');
+                    location.reload();
+                } else {
+                    alert('Error creating user. Username might already exist or you lack permission.');
+                }
+            })
+            .catch(error => {
+                console.error("Error", error);
+                alert("Failed to reach server");
+            });
+        });
+
+        function deleteUser(userId) {
+            if (confirm("Are you sure you want to delete this user?")) {
+                fetch('/api/users/' + userId, {
+                    method: 'DELETE'
+                })
+                .then(response => {
+                    if (response.ok) {
+                        alert('User deleted successfully');
+                        location.reload();
+                    } else {
+                        alert('Error deleting user. You may not have permission.');
+                    }
+                })
+                .catch(error => {
+                    console.error("Error", error);
+                    alert("Failed to reach server");
+                });
+            }
+        }
+    </script>
+</body>
+</html>

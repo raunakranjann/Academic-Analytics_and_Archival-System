@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,28 +23,26 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
-/**
- * Service responsible for the automated ingestion of academic records.
- * Optimized for Standalone Linux/Debian Deployment.
- */
 @Service
 public class TranscriptGenerationService {
 
     private static final Logger LOG = LoggerFactory.getLogger(TranscriptGenerationService.class);
 
-    private final StudentInfoRepository resultRepository;
+    private final StudentInfoRepository studentInfoRepository;
     private final StudentGradeRepository gradeRepository;
     private final StudentBacklogRepository backlogRepository;
     private final DataSyncStatus syncStatus;
     private final ResultSourceConfig sourceConfig;
 
-    public TranscriptGenerationService(StudentInfoRepository resultRepository,
+    public TranscriptGenerationService(StudentInfoRepository studentInfoRepository,
                                        StudentGradeRepository gradeRepository,
                                        StudentBacklogRepository backlogRepository,
                                        DataSyncStatus syncStatus,
                                        ResultSourceConfig sourceConfig) {
-        this.resultRepository = resultRepository;
+        this.studentInfoRepository = studentInfoRepository;
         this.gradeRepository = gradeRepository;
         this.backlogRepository = backlogRepository;
         this.syncStatus = syncStatus;
@@ -51,83 +50,67 @@ public class TranscriptGenerationService {
     }
 
     @Async
-    public void processResultRange(String linkKeyOrUrl, long startReg, long endReg) {
+    @Transactional
+    public void processResultSession(String linkKey, String sessionYear) {
+        List<Long> registrationNumbers = studentInfoRepository.findAll().stream()
+                .filter(s -> String.valueOf(s.getEffectiveSessionYear()).equals(sessionYear))
+                .map(StudentInformations::getRegistrationNumber)
+                .collect(Collectors.toList());
 
-        String urlPattern = linkKeyOrUrl.startsWith("http") ? linkKeyOrUrl : sourceConfig.getUrl(linkKeyOrUrl);
+        if (registrationNumbers.isEmpty()) {
+            LOG.warn("No students found for session year: {}", sessionYear);
+            syncStatus.finishJob();
+            return;
+        }
+        
+        executeIngestion(linkKey, registrationNumbers);
+    }
 
+    @Async
+    @Transactional
+    public void processResultRange(String linkKey, long startReg, long endReg) {
+        List<Long> registrationNumbers = LongStream.rangeClosed(startReg, endReg).boxed().collect(Collectors.toList());
+        executeIngestion(linkKey, registrationNumbers);
+    }
+
+    private void executeIngestion(String linkKey, List<Long> registrationNumbers) {
+        String urlPattern = linkKey.startsWith("http") ? linkKey : sourceConfig.getUrl(linkKey);
         if (urlPattern == null) {
-            LOG.error("Ingestion Aborted: Invalid Link Key or URL '{}'", linkKeyOrUrl);
+            LOG.error("Ingestion Aborted: Invalid Link Key or URL '{}'", linkKey);
             return;
         }
 
-        int totalItems = (int) (endReg - startReg + 1);
-        syncStatus.startJob(totalItems);
+        syncStatus.startJob(registrationNumbers.size());
 
-        // Fix: Ensure Playwright and Browser are wrapped in try-with-resources to prevent ghost processes
         try (Playwright playwright = Playwright.create()) {
-
-            // 1. Setup Linux-Specific Pathing
-            String appPath = System.getProperty("user.dir");
-            Path bundledPath = Paths.get(appPath, "browsers", "linux", "chrome-linux", "chrome");
-
-            // 2. Configure Essential Linux Flags
-            // These flags prevent the SIGTRAP crash on Ubuntu/Debian
             BrowserType.LaunchOptions launchOptions = new BrowserType.LaunchOptions()
                     .setHeadless(true)
-                    .setArgs(Arrays.asList(
-                            "--no-sandbox",              // Required for /opt/ or root execution
-                            "--disable-setuid-sandbox",  // Prevents fatal SIGTRAP errors
-                            "--disable-dev-shm-usage",   // Prevents memory crashes
-                            "--disable-gpu"              // Optimizes resource usage
-                    ));
+                    .setArgs(Arrays.asList("--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"));
 
-            // 3. Tiered Browser Resolution (Bundled -> System -> Download)
-            if (Files.exists(bundledPath)) {
-                launchOptions.setExecutablePath(bundledPath);
-                LOG.info("Linux Engine: Using bundled browser at {}", bundledPath);
-            } else {
-                LOG.warn("Bundled browser NOT found at {}. Attempting system default/download.", bundledPath);
-            }
-
-            // 4. Launch Browser and Context
             try (Browser browser = playwright.chromium().launch(launchOptions);
                  BrowserContext context = browser.newContext(new Browser.NewContextOptions().setViewportSize(1280, 720))) {
 
                 Page page = context.newPage();
 
-                for (long regNo = startReg; regNo <= endReg; regNo++) {
+                for (Long regNo : registrationNumbers) {
                     String logMessage = "Ingesting: " + regNo;
                     try {
                         String targetUrl = urlPattern.replace("{REG}", String.valueOf(regNo));
-
-                        page.navigate(targetUrl, new Page.NavigateOptions()
-                                .setTimeout(60000)
-                                .setWaitUntil(WaitUntilState.NETWORKIDLE));
+                        page.navigate(targetUrl, new Page.NavigateOptions().setTimeout(60000).setWaitUntil(WaitUntilState.NETWORKIDLE));
 
                         PageStatus status = checkPageStatus(page);
-
                         if (status == PageStatus.READY) {
                             boolean isLegacy = page.locator("#ContentPlaceHolder1_GridView3").count() > 0;
                             String curSem = isLegacy ? extractSemesterLegacy(page) : extractSemesterModern(page);
 
-                            StudentInformations profile = isLegacy
-                                    ? parseLegacyPortalProfile(page, regNo)
-                                    : parseModernPortalProfile(page, regNo);
-
-                            if (profile != null) {
-                                resultRepository.save(profile);
-                                StudentGrade grades = isLegacy
-                                        ? parseLegacyPortalGrades(page, regNo)
-                                        : parseModernPortalGrades(page, regNo);
-
-                                if (grades != null) {
-                                    synchronizeGrades(grades, regNo, curSem);
-                                }
-
+                            StudentInformations parsedProfile = isLegacy ? parseLegacyPortalProfile(page, regNo) : parseModernPortalProfile(page, regNo);
+                            if (parsedProfile != null) {
+                                saveOrUpdateStudentInformation(parsedProfile);
+                                StudentGrade grades = isLegacy ? parseLegacyPortalGrades(page, regNo) : parseModernPortalGrades(page, regNo);
+                                if (grades != null) synchronizeGrades(grades, regNo, curSem);
                                 String remarks = isLegacy ? extractRemarksLegacy(page) : extractRemarksModern(page);
                                 if (curSem != null) synchronizeBacklogs(regNo, curSem, remarks);
-
-                                logMessage = "Indexed: " + profile.getStudentName();
+                                logMessage = "Indexed: " + parsedProfile.getStudentName();
                                 LOG.info(logMessage);
                             } else {
                                 logMessage = "Skipped (Parse Error): " + regNo;
@@ -135,7 +118,6 @@ public class TranscriptGenerationService {
                         } else {
                             logMessage = "Skipped (" + status + "): " + regNo;
                         }
-
                     } catch (Exception e) {
                         logMessage = "Error: " + e.getMessage();
                         LOG.error("Failed to ingest {}", regNo, e);
@@ -151,9 +133,33 @@ public class TranscriptGenerationService {
         }
     }
 
-    // ==========================================
-    // DATA VALIDATION & PERSISTENCE
-    // ==========================================
+    private void saveOrUpdateStudentInformation(StudentInformations parsedProfile) {
+        Optional<StudentInformations> existingStudentOpt = studentInfoRepository.findById(parsedProfile.getRegistrationNumber());
+
+        if (existingStudentOpt.isPresent()) {
+            StudentInformations existingStudent = existingStudentOpt.get();
+            
+            // Preserve manually entered names. Only update if the DB field is blank.
+            if (existingStudent.getStudentName() == null || existingStudent.getStudentName().trim().isEmpty()) {
+                existingStudent.setStudentName(parsedProfile.getStudentName());
+            }
+            if (existingStudent.getFatherName() == null || existingStudent.getFatherName().trim().isEmpty()) {
+                existingStudent.setFatherName(parsedProfile.getFatherName());
+            }
+            if (existingStudent.getMotherName() == null || existingStudent.getMotherName().trim().isEmpty()) {
+                existingStudent.setMotherName(parsedProfile.getMotherName());
+            }
+
+            // Always update course and branch as they are derived from the registration number
+            existingStudent.setCourse(parsedProfile.getCourse());
+            existingStudent.setBranch(parsedProfile.getBranch());
+            
+            studentInfoRepository.save(existingStudent);
+        } else {
+            // New student, save all parsed information
+            studentInfoRepository.save(parsedProfile);
+        }
+    }
 
     private enum PageStatus { READY, EMPTY_TABLE, NAME_EMPTY, NO_RECORD, UNKNOWN }
 
@@ -207,7 +213,7 @@ public class TranscriptGenerationService {
             }
         } else {
             target = newGrades;
-            target.setStudentInformations(resultRepository.getReferenceById(regNo));
+            target.setStudentInformations(studentInfoRepository.getReferenceById(regNo));
         }
         gradeRepository.save(target);
     }
@@ -250,10 +256,6 @@ public class TranscriptGenerationService {
         backlogRepository.save(backlog);
     }
 
-    // ==========================================
-    // PARSING HELPERS & UTILITIES
-    // ==========================================
-
     private StudentInformations parseModernPortalProfile(Page page, long regNo) {
         try {
             String name = page.locator("tr:has-text('Student Name') >> td").nth(1).innerText().trim();
@@ -275,7 +277,8 @@ public class TranscriptGenerationService {
             g.setSem1(normalize(cells, 1)); g.setSem2(normalize(cells, 2));
             g.setSem3(normalize(cells, 3)); g.setSem4(normalize(cells, 4));
             g.setSem5(normalize(cells, 5)); g.setSem6(normalize(cells, 6));
-            g.setSem7(normalize(cells, 7)); g.setSem8(normalize(cells, 8));
+            g.setSem7(normalize(cells, 7));
+            g.setSem8(normalize(cells, 8));
             g.setCgpa(normalize(cells, 9));
             return g;
         } catch (Exception e) { return null; }
@@ -301,7 +304,8 @@ public class TranscriptGenerationService {
             g.setSem1(normalize(cells, 0)); g.setSem2(normalize(cells, 1));
             g.setSem3(normalize(cells, 2)); g.setSem4(normalize(cells, 3));
             g.setSem5(normalize(cells, 4)); g.setSem6(normalize(cells, 5));
-            g.setSem7(normalize(cells, 6)); g.setSem8(normalize(cells, 7));
+            g.setSem7(normalize(cells, 6));
+            g.setSem8(normalize(cells, 7));
             g.setCgpa(normalize(cells, 8));
             return g;
         } catch (Exception e) { return null; }

@@ -26,22 +26,18 @@
             z-index: 10;
         }
 
-        /* --- FIXED COLOR CLASSES (Using !important to force override) --- */
         .bg-green { background-color: #d4edda !important; color: #155724 !important; font-weight: bold; }
         .bg-yellow { background-color: #fff3cd !important; color: #856404 !important; font-weight: bold; }
         .bg-red { background-color: #f8d7da !important; color: #721c24 !important; font-weight: bold; }
         .bg-na { color: #ccc; font-weight: 400; }
 
-        /* Backlog Styling */
         .b-fail { background-color: #ffcccc !important; color: #cc0000 !important; font-weight: 900; }
         .b-pass { background-color: #e8f5e9 !important; color: #2e7d32 !important; font-weight: 600; }
 
-        /* --- UPDATED: FIXED COLUMN WIDTHS & OVERFLOW HANDLING --- */
         .grade-cell {
             padding: 0 !important;
             height: 45px;
             vertical-align: middle;
-            /* STRICT COLUMN WIDTH */
             width: 125px !important;
             min-width: 125px !important;
             max-width: 125px !important;
@@ -58,11 +54,10 @@
             justify-content: center;
             font-size: 0.85rem;
             cursor: default;
-            white-space: nowrap; /* Prevent wrapping to new lines */
+            white-space: nowrap;
             overflow: hidden;
         }
 
-        /* Logic for the "..." truncation */
         .text-truncate-custom {
             overflow: hidden;
             text-overflow: ellipsis;
@@ -80,6 +75,11 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
             margin-bottom: 25px;
         }
+
+        .row-missing-data {
+            background-color: #f2f2f2 !important;
+            opacity: 0.7;
+        }
     </style>
 </head>
 <body>
@@ -91,6 +91,8 @@
             <a class="navbar-brand fw-bold" href="/"><i class="bi bi-table me-2"></i> ACADEMIC REGISTRY</a>
             <div class="ms-auto">
                 <a href="/" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-speedometer2 me-1"></i> Dashboard</a>
+                <a href="/student/form" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-person-plus-fill me-1"></i> Add Student</a>
+                <a th:if="${isAdmin}" href="/user-management" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-people-fill me-1"></i> User Management</a>
                 <a href="/admin/ingestion-portal" class="btn btn-outline-light btn-sm"><i class="bi bi-cloud-arrow-down me-1"></i> Ingestion Portal</a>
             </div>
         </div>
@@ -174,11 +176,14 @@
                     <th class="text-center grade-cell">S7</th>
                     <th class="text-center grade-cell">S8</th>
                     <th class="text-center text-white" style="width: 80px; background-color: #34495e;">CGPA</th>
+                    <th class="text-center">Actions</th>
                 </tr>
                 </thead>
                 <tbody>
 
-                <tr th:each="student, iterStat : ${students}">
+                <tr th:each="student, iterStat : ${students}"
+                    th:with="maxSemForSession=${maxSemestersPerSession[student.getEffectiveSessionYear()]}, completedSem=${student.grade?.getCompletedSemesterCount() ?: 0}"
+                    th:classappend="${maxSemForSession != null and completedSem > 0 and (maxSemForSession - completedSem) >= 2} ? 'row-missing-data' : ''">
                     <td class="text-center text-muted" th:text="${(currentPage - 1) * pageSize + iterStat.count}">1</td>
                     <td class="font-monospace fw-bold text-primary" th:text="${student.registrationNumber}"></td>
                     <td class="fw-semibold text-dark" th:text="${student.studentName}"></td>
@@ -203,7 +208,7 @@
                              th:with="bVal=${student.grade.backlog.getSem(i)}"
                              th:classappend="${
                  bVal == 'PASS' ? 'bg-green' :
-                 (bVal != null and bVal != 'NA' ? 'bg-red' : 'bg-na')
+                 (bVal != null and bVal != 'NA' and bVal != 'PASS' ? 'bg-red' : 'bg-na')
              }">
 
                             <span th:if="${bVal == 'PASS'}" class="fw-bold">PASS</span>
@@ -232,10 +237,13 @@
         }">
                         <span th:text="${cgpa}"></span>
                     </td>
+                    <td class="text-center">
+                        <a th:href="@{/student/form(id=${student.registrationNumber})}" class="btn btn-sm btn-primary">Edit</a>
+                    </td>
                 </tr>
 
                 <tr th:if="${#lists.isEmpty(students)}">
-                    <td colspan="13" class="text-center py-5 text-muted">
+                    <td colspan="14" class="text-center py-5 text-muted">
                         <i class="bi bi-inbox fs-1 d-block mb-2"></i>
                         No student records found matching your criteria.
                     </td>
