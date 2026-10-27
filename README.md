@@ -5,6 +5,13 @@
 
 <hr>
 
+
+<img width="1970" height="1098" alt="image" src="https://github.com/user-attachments/assets/1c509a2e-bd62-42c7-a35a-e41c8b3e276e" />
+<img width="1970" height="1098" alt="Untitled design" src="https://github.com/user-attachments/assets/242e43ed-3530-449b-a7bb-2c57ee5ebc8c" />
+
+
+
+<hr>
 ## 📂 Academic Analytics (Source-Code)
 
 Source code for the Linux standalone academic archival system.
